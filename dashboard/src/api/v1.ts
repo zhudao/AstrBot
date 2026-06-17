@@ -2,10 +2,12 @@ import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 
 import * as openApiV1 from './generated/openapi-v1';
 import {
+  type BackupChunkUploadRequest,
   client as openApiV1Client,
   type BackupExportRequest,
   type BackupRenameRequest,
   type BackupUploadInitRequest,
+  type BackupUploadRequest,
   type BackupUploadSessionRequest,
   type BotConfigRequest,
   type BotRegistrationRequest,
@@ -33,7 +35,6 @@ import {
   type LoginRequest,
   type ListConversationsData,
   type McpServerConfig,
-  type MigrationRequest,
   type ModelScopeSyncRequest,
   type PipInstallRequest,
   type PluginVersionSupportRequest,
@@ -95,7 +96,6 @@ export interface ProviderEmbeddingDimensionData {
 export interface VersionData {
   version?: string;
   dashboard_version?: string;
-  need_migration?: boolean;
   change_pwd_hint?: boolean;
   md5_pwd_hint?: boolean;
   password_upgrade_required?: boolean;
@@ -189,7 +189,21 @@ function generatedQuery<T extends object>(
   return params as (T & Record<string, unknown>) | undefined;
 }
 
-function generatedFormData(formData: FormData) {
+function generatedFormData(formData: FormData | Record<string, unknown>) {
+  if (typeof FormData !== 'undefined' && formData instanceof FormData) {
+    const body: Record<string, unknown> = {};
+    formData.forEach((value, key) => {
+      const existing = body[key];
+      if (existing === undefined) {
+        body[key] = value;
+      } else if (Array.isArray(existing)) {
+        existing.push(value);
+      } else {
+        body[key] = [existing, value];
+      }
+    });
+    return body as any;
+  }
   return formData as any;
 }
 
@@ -574,9 +588,6 @@ export const updatesApi = {
       openApiV1.installPipPackage({ body: payload }),
     );
   },
-  runMigrations(payload?: MigrationRequest) {
-    return typed<OpenConfig>(openApiV1.runMigrations({ body: payload }));
-  },
 };
 
 export const backupApi = {
@@ -591,7 +602,7 @@ export const backupApi = {
       openApiV1.getBackupProgress({ path: { task_id: taskId } }),
     );
   },
-  upload(formData: FormData) {
+  upload(formData: FormData | BackupUploadRequest) {
     return typed<any>(
       openApiV1.uploadBackup({ body: generatedFormData(formData) }),
     );
@@ -599,7 +610,7 @@ export const backupApi = {
   initUpload(payload: BackupUploadInitRequest) {
     return typed<any>(openApiV1.initBackupUpload({ body: payload }));
   },
-  uploadChunk(formData: FormData) {
+  uploadChunk(formData: FormData | BackupChunkUploadRequest) {
     return typed<any>(
       openApiV1.uploadBackupChunk({ body: generatedFormData(formData) }),
     );
@@ -1327,9 +1338,9 @@ export const skillApi = {
   list(params?: { enabled?: boolean; source?: string }) {
     return typed<any>(openApiV1.listSkills({ query: params }));
   },
-  uploadBatch(formData: FormData) {
+  uploadBatch(files: File[]) {
     return typed<any>(
-      openApiV1.uploadSkillsBatch({ body: generatedFormData(formData) }),
+      openApiV1.uploadSkillsBatch({ body: { files } }),
     );
   },
   setEnabled(skillName: string, enabled: boolean) {
