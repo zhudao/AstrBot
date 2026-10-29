@@ -276,6 +276,12 @@ def extract_web_search_refs(accumulated_text: str, accumulated_parts: list) -> d
         "web_search_tavily",
         "web_search_bocha",
         "web_search_brave",
+        "web_search_deepseek",
+        "web_search_serpapi",
+        "news_search_serpapi",
+        "image_search_serpapi",
+        "finance_search_serpapi",
+        "scholar_search_serpapi",
     ]
     web_search_results = {}
     tool_call_parts = [
@@ -1358,6 +1364,7 @@ class ChatService:
                         "selected_provider": selected_provider,
                         "selected_model": selected_model,
                         "flags": flags,
+                        "locale": post_data.get("locale"),
                         "message_id": message_id,
                         "llm_checkpoint_id": llm_checkpoint_id,
                         "thread_selected_text": thread_selected_text,
@@ -1794,6 +1801,7 @@ class ChatService:
             "session_id": thread.thread_id,
             "message": data.get("message", []),
             "flags": resolve_webchat_request_flags(data),
+            "locale": data.get("locale"),
             "selected_provider": data.get("selected_provider"),
             "selected_model": data.get("selected_model"),
             "_platform_history_id": "webchat_thread",
@@ -2032,6 +2040,7 @@ class ChatService:
             "session_id": session_id,
             "message": source_user_record.content.get("message", []),
             "flags": resolve_webchat_request_flags(data),
+            "locale": data.get("locale"),
             "selected_provider": data.get("selected_provider"),
             "selected_model": data.get("selected_model"),
             "_skip_user_history": True,

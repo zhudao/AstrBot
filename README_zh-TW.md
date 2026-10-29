@@ -101,7 +101,7 @@ uv tool upgrade astrbot --python 3.12
 
 **更多部署方式**
 
-若你需要面板化或更高自訂程度的部署，可參考 [寶塔面板](https://docs.astrbot.app/deploy/astrbot/btpanel.html)（BT Panel 應用商店安裝）、[1Panel](https://docs.astrbot.app/deploy/astrbot/1panel.html)（1Panel 應用商店安裝）、[CasaOS](https://docs.astrbot.app/deploy/astrbot/casaos.html)（NAS / 家用伺服器可視化部署）與 [手動部署](https://docs.astrbot.app/deploy/astrbot/cli.html)（基於原始碼與 `uv` 的完整自訂安裝）。
+若你需要面板化或更高自訂程度的部署，可參考 [寶塔面板](https://docs.astrbot.app/deploy/astrbot/btpanel.html)、[1Panel](https://docs.astrbot.app/deploy/astrbot/1panel.html)、[CasaOS](https://docs.astrbot.app/deploy/astrbot/casaos.html) 或 [原始碼部署](https://docs.astrbot.app/deploy/astrbot/cli.html)。
 
 ## ❤️ 贊助商
 
@@ -210,7 +210,7 @@ pre-commit install
 特別感謝所有 Contributors 和外掛開發者對 AstrBot 的貢獻 ❤️
 
 <a href="https://github.com/AstrBotDevs/AstrBot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=AstrBotDevs/AstrBot&max=300&columns=15" />
+  <img src="https://contrib.rocks/image?repo=AstrBotDevs/AstrBot&max=500&columns=17" />
 </a>
 
 開源夥伴 ❤️
