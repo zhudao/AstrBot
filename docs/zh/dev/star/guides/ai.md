@@ -438,6 +438,32 @@ result = await run.result()
 
 `run` 提供 turn ID、输出、取消、steer 和 follow-up 操作。`run.session` 返回只读状态快照。
 
+可以通过 `metadata` 传入业务标记，让已有 hooks 识别插件触发的这一轮：
+
+```py
+run = await self.context.agent.run_turn(
+    umo=event.unified_msg_origin,
+    input_message=[PlainInput(text="请简短地问候用户。")],
+    metadata={
+        "private_companion": {
+            "kind": "proactive_message",
+            "attempt_id": "check-in-001",
+        }
+    },
+)
+```
+
+在已有 hook 中，从该 hook 收到的 wakeup event 读取 metadata：
+
+```py
+metadata = event.get_extra("agent_metadata", {})
+companion = metadata.get("private_companion", {})
+```
+
+`metadata` 是由 JSON 兼容值组成的字典。Core 在准入 hooks 执行前，将它深拷贝到 wakeup event 的 `agent_metadata` extra 中，调用方后续修改或其他提交不会影响该快照。所有键都保留在 `agent_metadata` 下，不会覆盖框架 extras，也不会授予权限。Core 不会自动将 metadata 加入模型提示词或会话历史。建议插件使用自己的命名空间，并在 hook 中显式注入模型需要的上下文。
+
+省略 `metadata` 时创建空字典，不会从 `source_event` 复制 metadata 或其他任意 extras。`run.follow_up()` 的新一轮使用空 metadata；如果后续一轮需要 metadata，请显式指定目标 `session_id` 调用 `run_turn()`。
+
 Core 按当前配置档的 `agent.runtime` 选择已注册实现；使用 `ctx.agent.register_runtime(name, runtime)` 注册后，该实现可用于主代理，也可由内置 runtime 作为子代理调用。未注册的名称明确报错；Dify、Coze 等现有第三方路径继续沿用原执行方式。
 
 `/stop` 按 UMO 向已提交的 turn 调用 `turn.request_stop()`。运行中的 turn 会调用 `AgentSession.request_stop_turn(turn)`。runtime 接受请求并负责执行收尾时返回 `True`，返回 `False` 则使用 `cancel_turn()` 和本地任务取消。排队中的 turn 直接取消。`request_stop()` 提交请求后立即返回，用 `await turn.result()` 等待收尾。
@@ -446,27 +472,41 @@ Core 传入公共 `AgentInput`：原始 `AstrMessageEvent`、权限、可选的 
 
 实现 runtime 时复用 `AgentSession.run_turn()`：Core 通过调度参数 `run_turn(input, admit=...)` 传入准入检查，与 `AgentInput` 分离。它在会话串行锁及实现提供的 `_execution_scope()` 内执行，再进入 `execute_turn()`。排队后会重新检查 AI 启用状态、权限和插件能力；不要通过重写调度绕过准入。额外的锁由 runtime 提供。可选的 `active_turn(umo)` 支持普通消息的活跃 turn 发现；未实现时返回 `None`，session 仍负责排队。内置 runtime 在自己的执行阶段构造 `ProviderRequest`、解析模型配置并调用现有模型 hooks；外部实现不需要导入 `astr_agent_runtime`。
 
-如需自行处理模型回复，设置 `send_to_user=False`：
+设置 `send_to_user=False` 后，可以通过 `run.events()` 收集待发送消息，再由插件处理和发送。在插件的异步方法中使用：
 
 ```py
-from astrbot.api.event import MessageChain
+from astrbot.api.agents import PlainInput, TurnStatus, chain_from_content
 
 run = await self.context.agent.run_turn(
     umo=event.unified_msg_origin,
     input_message=[PlainInput(text="请生成视频分析摘要。")],
     send_to_user=False,
 )
+outputs = []
+async for agent_event in run.events():
+    if agent_event.type == "output.ready":
+        outputs.append(agent_event.payload)
+
 result = await run.result()
-if result.text:
-    await self.context.send_message(
-        event.unified_msg_origin,
-        MessageChain().message(f"视频分析结果：\n{result.text}"),
-    )
+if result.status == TurnStatus.COMPLETED:
+    # Review or transform the outputs before sending.
+    for output in outputs:
+        await self.context.send_message(
+            output.target_umo, chain_from_content(output.content)
+        )
 ```
 
-`send_to_user=False` 只跳过 Core 的自动输出呈现及平台回复装饰、自动 TTS，执行历史照常保存。工具或插件显式调用 `event.send()`、`Context.send_message()`、`send_message_to_user` 时仍然正常发送；框架不会拦截这些调用。
+`output.ready` 的 payload 类型为 `OutputReady`：
 
-`events()` 支持多个独立观察者和事后重放，提供 `message.completed`、工具调用等 runtime 事件；监听不会截走平台输出或重复发送。SDK 的最终 `turn.finished` 事件在自动输出处理结束后发布。
+| 字段 | 含义 |
+| --- | --- |
+| `target_umo` | 消息的目标会话。 |
+| `source` | `tool` 表示工具准备的消息；`reply` 表示最终回复。 |
+| `content` | 有序的 `tuple[OutputComponent, ...]`，包含文本、图片、音频、视频、文件等消息组件。 |
+
+这些事件已包含最终回复，无需再次发送 `result.text`。只需要最终回复时，可筛选 `output.source == "reply"`。`output.ready` 表示内容就绪，不代表平台投递成功。
+
+`events()` 支持多个独立观察者和事后重放，提供 `output.ready`、`message.completed`、工具调用等 runtime 事件；读取事件本身不会发送消息。SDK 的最终 `turn.finished` 事件在自动输出处理结束后发布。
 
 ```py
 # Queue another turn in this exact conversation, inheriting the output policy.
@@ -492,6 +532,97 @@ Core 根据 `source_event` 或当前活跃的同 UMO 事件解析权限。没有
 
 ## 对话管理器
 
+运行时历史只包含模型消息（`system`、`user`、`assistant` 和 `tool`）。旧
+`_checkpoint` 标记在数据库迁移或旧备份导入时完成转换。平台历史关联使用
+`turn_id` 和 `context_event_id`，不再接受 `llm_checkpoint_id`。内部消息转换使用
+`load_messages` / `dump_messages`，保留原有的 `_no_save` 语义。
+
+在事件存储中，`_no_save` 表示不进入后续恢复的上下文，并不表示原文不落库。
+消息原文及标记只保存一份；恢复时，消息级 `_no_save=True` 会排除整条消息，
+内容片段级标记只排除对应片段。不会额外保存过滤后的副本，也不会在新事件中写入
+`include_in_context`。旧版本已有的排除事件仍按原规则读取，避免历史重复。
+核心直接读取结构化消息列表，插件接口的 `Conversation.history` 仍为 JSON 字符串。
+完整历史更新与 Agent 阶段暂存共用差异转换规则，重排时保留未变消息的 ID。
+插件的独立写入不修改正在运行的 Agent 工作消息；基于过期版本的写入仍会触发冲突。
+
+统一使用 `self.context.conversations` 操作对话，已有的 `new_conversation`、
+`get_conversation`、切换、更新和删除方法继续可用。
+`self.context.conversation_manager` 保留为兼容别名。原有的
+`event.conversation_events` 和 `get_conversation_events()` 入口已移除，
+插件通过 `conversations.append_message()` 和 `conversations.append_plugin_event()`
+写入，不再直接操作 writer。
+
+已移除过时的 `update_conversation_title()` 和 `update_conversation_persona_id()`。
+请分别改用 `update_conversation(..., title=...)` 和
+`update_conversation(..., persona_id=...)`。
+
+### 追加模型消息 `append_message`
+
+```py
+conversations = self.context.conversations
+message_id = await conversations.append_message(
+    "用户偏好简洁的回答。",
+    cid=target_cid,
+)
+```
+
+`content` 接受文本或 AstrBot 的 `ContentPart` 对象列表：
+
+```py
+from astrbot.core.agent.message import ImageURLPart, TextPart
+
+await conversations.append_message(
+    [
+        TextPart(text="请描述这张图片。"),
+        ImageURLPart(
+            image_url=ImageURLPart.ImageURL(url="https://example.com/image.png")
+        ),
+    ],
+    cid=target_cid,
+)
+```
+
+Core 固定补上 `role="user"`，
+插件不需要提交角色或完整消息对象。消息会持久化并追加到对话上下文。
+即使在 hook 或工具内调用，也不会修改正在运行的 Agent 的工作上下文。
+接口在数据库事务提交后返回字符串 ID；可通过可选的 `message_id` 标识同一次提交的重试。
+
+### 追加插件自定义事件 `append_plugin_event`
+
+```py
+event_id = await conversations.append_plugin_event(
+    event_type="my_plugin.retrieval_completed",
+    data={"document_ids": ["document-1"]},
+    cid=target_cid,
+)
+```
+
+该接口保存关联当前对话的自定义事件，不改变本次或后续模型上下文。
+建议 `event_type` 使用插件名称前缀以避免重名；Core 不会自动推断或校验名称中的插件身份。
+`data` 为可 JSON 序列化的对象。
+内部事件命名空间、版本、序号和创建时间由 Core 填充。
+接口返回已保存的事件 ID；可通过可选的 `event_id` 标识同一次提交的重试。
+
+插件自己的可变状态，如果不需要保留对话事件历史，继续使用
+[插件 KV 存储](./storage.md)，例如 `await self.put_kv_data(f"retrieval:{cid}", data)`。
+KV 按插件隔离；需要按对话区分时，由插件把 `cid` 放入 key。
+
+两个追加接口都必须显式传入关键字参数 `cid`，目标对话必须已存在，Core 从存储记录取得 UMO。
+无效或不存在的 CID 会抛出 `ValueError`，省略 `cid` 会抛出 `TypeError`。
+接口不会从活动消息、当前选中的对话或调用任务推断目标，也不会启动 Agent 或安排 follow-up。
+
+修改当前执行的上下文，应修改相应 hook 收到的 `ProviderRequest.contexts` 或运行时消息列表。
+宿主通过本次执行拥有的 writer 记录这些修改。插件 hook 的签名不变，也不会收到 writer。
+每次执行创建自己的 hooks 实例，后台任务和 cron 不通过 `ContextVar` 继承对话 writer 或插件身份。
+
+直接调用 `update_conversation()`、`add_message_pair()` 等对话服务，即使发生在 hook 内，
+也是独立的持久化操作，不会同步当前执行的工作上下文。若独立写入改变了存储版本，
+当前执行的下一次写入可能抛出 `ConversationConflictError`，而不是覆盖新历史。
+本次执行的上下文修改应使用 hook 参数；不能通过重试有副作用的工具来解决版本冲突。
+
+只有在插件 hook 边界捕获的工作上下文修改才会标记为插件来源并应用相应的基线回收策略。
+对话服务直接写入的历史修改保留 unknown 归因，采用保守的保留策略。
+
 ### 获取会话当前的 LLM 对话历史 `get_conversation`
 
 ```py
@@ -500,7 +631,7 @@ Core 根据 `source_event` 或当前活跃的同 UMO 事件解析权限。没有
 from astrbot.api.provider import Conversation
 
 uid = event.unified_msg_origin
-conv_mgr = self.context.conversation_manager
+conv_mgr = self.context.conversations
 curr_cid = await conv_mgr.get_curr_conversation_id(uid)
 conversation = await conv_mgr.get_conversation(uid, curr_cid)  # Conversation
 ```
@@ -543,7 +674,7 @@ from astrbot.api.agents import (
     TextPart,
 )
 
-conv_mgr = self.context.conversation_manager
+conv_mgr = self.context.conversations
 provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
 curr_cid = await conv_mgr.get_curr_conversation_id(event.unified_msg_origin)
 user_msg = UserMessageSegment(content=[TextPart(text="hi")])
