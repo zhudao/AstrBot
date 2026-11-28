@@ -22,6 +22,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from astrbot.core.utils.datetime_utils import generate_timestamp_id
 from astrbot.core.utils.media_utils import (
     MEDIA_MIME_EXTENSIONS,
+    detect_audio_mime_type,
     detect_image_mime_type_async,
 )
 
@@ -164,10 +165,15 @@ class WebChatMessageEvent(AstrMessageEvent):
                     return None
             elif isinstance(comp, Record):
                 # save record to local
-                filename = f"{generate_timestamp_id()}.wav"
-                path = os.path.join(attachments_dir, filename)
                 record_base64 = await comp.convert_to_base64()
                 record_bytes = base64.b64decode(record_base64)
+                # The payload keeps its original container (MP3 passthrough), so
+                # derive the extension from the real bytes; the dashboard serves
+                # the file with a Content-Type matching that extension.
+                record_mime_type = detect_audio_mime_type(record_bytes)
+                suffix = MEDIA_MIME_EXTENSIONS.get(record_mime_type, ".mp3")
+                filename = f"{generate_timestamp_id()}{suffix}"
+                path = os.path.join(attachments_dir, filename)
                 await asyncio.to_thread(Path(path).write_bytes, record_bytes)
                 data = f"[RECORD]{filename}"
                 accepted = await webchat_queue_mgr.put_back_queue(
@@ -227,6 +233,14 @@ class WebChatMessageEvent(AstrMessageEvent):
 
     async def send(self, message: MessageChain | None) -> None:
         message_id = self.message_obj.message_id
+        session_id = self.get_extra("view_session_id", self.session_id)
+        reasoning = self._extras.pop("_webchat_pending_reasoning", None)
+        if message is not None and reasoning:
+            await self._send(
+                message_id,
+                MessageChain(type="reasoning").message(reasoning),
+                session_id,
+            )
         follow_up_capture = self.get_extra("_follow_up_captured")
         if message is None and isinstance(follow_up_capture, dict):
             request_id = str(message_id)
@@ -242,7 +256,7 @@ class WebChatMessageEvent(AstrMessageEvent):
         await WebChatMessageEvent._send(
             message_id,
             message,
-            session_id=self.get_extra("view_session_id", self.session_id),
+            session_id=session_id,
             history_platform_id=self.get_extra("view_history_platform_id", "webchat"),
         )
         await super().send(message if message is not None else MessageChain([]))

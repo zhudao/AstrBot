@@ -59,6 +59,18 @@ WEBCHAT_IMAGE_MIME_TYPES = {
     ".gif": "image/gif",
     ".webp": "image/webp",
 }
+# Audio attachments keep the container they were written with (MP3 is no longer
+# transcoded to WAV), so the served Content-Type follows the extension.
+WEBCHAT_AUDIO_MIME_TYPES = {
+    ".aac": "audio/aac",
+    ".amr": "audio/amr",
+    ".flac": "audio/flac",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".silk": "audio/silk",
+    ".wav": "audio/wav",
+}
 
 
 def sanitize_upload_filename(filename: str | None) -> str:
@@ -618,8 +630,8 @@ class ChatService:
             raise ChatServiceError("File access error")
 
         filename_ext = file_path.suffix.lower()
-        if filename_ext == ".wav":
-            return str(file_path), "audio/wav"
+        if filename_ext in WEBCHAT_AUDIO_MIME_TYPES:
+            return str(file_path), WEBCHAT_AUDIO_MIME_TYPES[filename_ext]
         if filename_ext in WEBCHAT_IMAGE_MIME_TYPES:
             return str(file_path), WEBCHAT_IMAGE_MIME_TYPES[filename_ext]
         return str(file_path), None
@@ -1199,6 +1211,7 @@ class ChatService:
                 },
             )
 
+        finalized = False
         self.running_convs[run.session_id] = True
         try:
             while True:
@@ -1217,7 +1230,9 @@ class ChatService:
                 if msg_type == "end":
                     end_frame = result
                     await save_reply(final=True)
-                    run.status = "completed"
+                    finalized = True
+                    if run.status != "failed":
+                        run.status = "completed"
                     break
 
                 if chain_type == "agent_stats":
@@ -1264,6 +1279,7 @@ class ChatService:
                             },
                         }
                 elif msg_type == "error":
+                    run.status = "failed"
                     error = (
                         result_text
                         if isinstance(result_text, dict)
@@ -1324,7 +1340,7 @@ class ChatService:
             self._publish_chat_run(run, {"type": "error", "data": error})
         finally:
             try:
-                if run.status != "completed":
+                if not finalized:
                     await save_reply(final=True)
             except Exception as exc:
                 logger.exception(
